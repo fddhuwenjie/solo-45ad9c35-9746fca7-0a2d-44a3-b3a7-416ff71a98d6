@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>稀释工作单 - {{ name }}</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="ws-page">
+  <div class="no-print" style="margin-bottom:16px">
+    <button onclick="window.print()" style="padding:8px 18px">🖨️ 打印 / 另存为 PDF</button>
+  </div>
+
+  <h1>微孔板梯度稀释工作单</h1>
+  <div class="ws-meta">
+    实验：<b>{{ name }}</b>
+    {% if exp %}· 实验编号 #{{ exp.id }} · 更新于 {{ exp.updated_at }}{% endif %}
+    · {{ r.plate_type }} 孔板（{{ r.rows }}×{{ r.cols }}）
+    · 母液 {{ r.config.stock_concentration }} {{ r.summary.concentration_unit }}
+  </div>
+
+  <h2>一、板图</h2>
+  <div style="display:grid;gap:3px;grid-template-columns:22px repeat({{ r.cols }}, 1fr)">
+    <div></div>
+    {% for c in range(1, r.cols + 1) %}<div style="font-size:10px;color:#555;text-align:center">{{ c }}</div>{% endfor %}
+    {% for row in range(r.rows) %}
+      <div style="font-size:10px;font-weight:700;color:#555">{{ 'ABCDEFGH'[row] }}</div>
+      {% for col in range(r.cols) %}
+        {% set slot = row * r.cols + col %}
+        {% set wmap = r.wells | selectattr('slot', 'equalto', slot) | list %}
+        {% if wmap %}
+          {% set w = wmap[0] %}
+          <div class="w {{ 'blank' if w.role == 'blank' else '' }} {{ 'err' if w.issue_codes else '' }}">
+            <b>{{ w.label }}{% if w.locked %} 🔒{% endif %}</b>
+            {% if w.role == 'blank' %}空白{% else %}终 {{ '%.4g'|format(w.computed_conc or 0) }}{% endif %}
+            <br>{{ '%.4g'|format(w.final_volume) }}µL
+            <br>← {{ w.source_label or '–' }}
+          </div>
+        {% else %}
+          <div class="w" style="background:#f7f7f7;color:#aaa"><b>{{ 'ABCDEFGH'[row] }}{{ col + 1 }}</b>空</div>
+        {% endif %}
+      {% endfor %}
+    {% endfor %}
+  </div>
+  <div style="font-size:11px;color:#555;margin-top:4px">
+    每孔标注：实际终浓度（{{ r.summary.concentration_unit }}）／终体积(µL)／来源；红框孔存在待确认问题，见第四节。
+  </div>
+
+  <h2>二、孔位明细</h2>
+  <table class="ws-table">
+    <thead><tr>
+      <th>孔位</th><th>角色</th><th>级别</th><th>平行</th>
+      <th>目标浓度</th><th>终浓度</th><th>终体积 µL</th><th>配制 µL</th>
+      <th>来源</th><th>分析物 µL</th><th>稀释液 µL</th><th>步骤#</th><th>执行✓</th>
+    </tr></thead>
+    <tbody>
+    {% for w in r.wells %}
+      <tr>
+        <td><b>{{ w.label }}</b>{% if w.locked %} 🔒{% endif %}</td>
+        <td>{{ '空白' if w.role == 'blank' else '样品' }}</td>
+        <td>{{ '–' if w.level < 0 else w.level + 1 }}</td>
+        <td>{{ w.replicate or '–' }}</td>
+        <td>{{ w.target_conc if w.role == 'sample' else 0 }}</td>
+        <td>{{ '%.4g'|format(w.computed_conc or 0) }}</td>
+        <td>{{ '%.4g'|format(w.final_volume) }}</td>
+        <td>{{ '%.4g'|format(w.prep_volume) }}</td>
+        <td>{{ w.source_label or '–' }}</td>
+        <td>{{ '%.4g'|format(w.analyte_transfer.volume) if w.analyte_transfer else '–' }}</td>
+        <td>{{ '%.4g'|format(w.diluent_transfer.volume) if w.diluent_transfer else '–' }}</td>
+        <td>{{ w.step_orders | join(', ') }}</td>
+        <td style="width:48px">　</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>三、台面操作步骤（按顺序执行，逐步核对）</h2>
+  <table class="ws-table">
+    <thead><tr><th style="width:40px">#</th><th>操作</th><th style="width:80px">执行者</th><th style="width:80px">核对✓</th></tr></thead>
+    <tbody>
+    {% for s in r.steps %}
+      {% if s.phase_start %}
+        <tr><td colspan="4" style="background:#eef6f9;font-weight:700">{{ s.phase_title }}</td></tr>
+      {% endif %}
+      <tr>
+        <td><b>{{ s.order }}</b></td>
+        <td>{{ s.text }} <span style="color:#666">（目标 {{ s.target_label }}）</span></td>
+        <td>　</td><td>　</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>四、可行性检查与偏差</h2>
+  {% if r.issues %}
+    <table class="ws-table">
+      <thead><tr><th style="width:56px">级别</th><th style="width:140px">代码</th><th>说明</th><th style="width:140px">相关孔</th></tr></thead>
+      <tbody>
+      {% for i in r.issues %}
+        <tr>
+          <td>{{ '错误' if i.severity == 'error' else '警告' }}</td>
+          <td>{{ i.code }}</td>
+          <td>{{ i.message }}</td>
+          <td>{{ i.slot_labels | join(', ') }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div>✓ 全部检查通过。</div>
+  {% endif %}
+  {% set devs = [] %}
+  {% for w in r.wells %}{% for d in (w.deviations or []) %}{% set _ = devs.append({'w': w, 'd': d}) %}{% endfor %}{% endfor %}
+  {% if devs %}
+    <table class="ws-table">
+      <thead><tr><th style="width:60px">孔位</th><th>最接近可行方案 / 偏差说明</th></tr></thead>
+      <tbody>
+      {% for item in devs %}
+        <tr><td><b>{{ item.w.label }}</b></td><td>{{ item.d.message }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+
+  <h2>五、物料汇总</h2>
+  <table class="ws-table" style="max-width:520px">
+    <tr><th>母液总消耗</th><td>{{ r.summary.stock_used }} µL{% if r.config.stock_volume %}（备量 {{ r.config.stock_volume }} µL）{% endif %}</td></tr>
+    <tr><th>稀释液总消耗</th><td>{{ r.summary.diluent_used }} µL</td></tr>
+    <tr><th>样品孔 / 空白孔</th><td>{{ r.summary.sample_count }} / {{ r.summary.blank_count }}</td></tr>
+    <tr><th>台面步骤数</th><td>{{ r.summary.step_count }}</td></tr>
+  </table>
+
+  <div style="margin-top:30px;display:flex;gap:60px;font-size:13px">
+    <div style="border-top:1px solid #333;padding-top:6px;min-width:160px;text-align:center;color:#555">操作者签名 / 日期</div>
+    <div style="border-top:1px solid #333;padding-top:6px;min-width:160px;text-align:center;color:#555">复核者签名 / 日期</div>
+  </div>
+</div>
+</body>
+</html>

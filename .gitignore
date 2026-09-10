@@ -1,0 +1,5 @@
+.venv/
+__pycache__/
+*.pyc
+dilution.db
+.DS_Store

@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>微孔板梯度稀释规划器</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <h1>🧪 微孔板梯度稀释规划器</h1>
+  <span class="sub">物料守恒 · 本地计算 · 数据不出本机</span>
+  <span class="spacer"></span>
+  <select id="exampleSelect" title="载入内置示例">
+    <option value="">载入内置示例…</option>
+  </select>
+  <button class="ghost" onclick="window.print()">🖨️ 打印当前页</button>
+</header>
+
+<div class="layout">
+  <!-- ============ 左：参数表单 ============ -->
+  <div>
+    <div class="panel">
+      <h2>实验参数</h2>
+      <div class="saved-bar" id="savedBar">
+        <span>状态：<b id="savedState">未保存（当前结果仅在内存中）</b></span>
+      </div>
+      <div class="form-grid">
+        <label class="field">孔板类型
+          <select id="fPlate">
+            <option value="96">96 孔板（8×12，280 µL）</option>
+            <option value="24">24 孔板（4×6，2900 µL）</option>
+          </select>
+        </label>
+        <label class="field">单孔容量 (µL)
+          <input type="number" id="fCapacity" min="1" step="1">
+        </label>
+        <label class="field">母液浓度
+          <input type="number" id="fStockConc" min="0" step="any" value="100">
+        </label>
+        <label class="field">浓度单位
+          <input type="text" id="fUnit" value="µM" style="width:100%">
+        </label>
+        <label class="field">母液备量 (µL，可选)
+          <input type="number" id="fStockVol" min="0" step="any" placeholder="不限">
+        </label>
+        <label class="field">允许连续稀释级数
+          <input type="number" id="fMaxChain" min="1" step="1" value="12">
+        </label>
+        <label class="field">最小混匀体积 (µL)
+          <input type="number" id="fMinMix" min="0" step="any" value="50">
+        </label>
+        <label class="field">死体积 (µL)
+          <input type="number" id="fDead" min="0" step="any" value="20">
+        </label>
+      </div>
+
+      <h2 style="margin-top:14px">移液器量程（可多档，µL）</h2>
+      <div id="rangeList"></div>
+      <div class="row-actions">
+        <button type="button" onclick="addRange()">＋ 添加量程档</button>
+      </div>
+
+      <h2 style="margin-top:14px">目标浓度梯度</h2>
+      <div class="target-row" style="color:var(--muted);font-size:11px">
+        <span>浓度</span><span>终体积 µL</span><span>平行</span><span></span>
+      </div>
+      <div id="targetList"></div>
+      <div class="row-actions">
+        <button type="button" onclick="addTarget()">＋ 添加浓度点</button>
+        <button type="button" onclick="makeSerial()">⚡ 按系列稀释生成…</button>
+      </div>
+
+      <h2 style="margin-top:14px">空白孔</h2>
+      <div class="form-grid">
+        <label class="field">空白孔数量
+          <input type="number" id="fBlanks" min="0" step="1" value="2">
+        </label>
+        <label class="field">空白孔体积 (µL)
+          <input type="number" id="fBlankVol" min="0" step="any" value="100">
+        </label>
+      </div>
+
+      <div class="row-actions" style="margin-top:14px">
+        <button class="primary" type="button" onclick="recompute(true)">↻ 重新计算</button>
+        <button type="button" onclick="autoLayout()">🧹 恢复自动布板</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>保存与导出</h2>
+      <div class="form-grid">
+        <label class="field full">实验名称
+          <input type="text" id="expName" placeholder="例如：化合物 X 剂量-反应预实验">
+        </label>
+      </div>
+      <div class="row-actions">
+        <button class="primary" type="button" onclick="saveExperiment()">💾 保存实验</button>
+        <select id="savedSelect" title="打开已保存实验" style="max-width:170px">
+          <option value="">已保存实验…</option>
+        </select>
+        <button type="button" class="danger" onclick="deleteCurrent()">删除</button>
+      </div>
+      <div class="row-actions">
+        <button type="button" onclick="exportCSV()">⬇️ 导出 CSV</button>
+        <button type="button" onclick="openWorksheet()">🖨️ 打印工作单（带板图）</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 中：板图 + 问题 + 汇总 ============ -->
+  <div>
+    <div class="panel">
+      <h2>交互式板图
+        <span style="text-transform:none;font-weight:400">
+          · 拖拽孔位调整布局 · 双击锁定/解锁 · 单击查看来源
+        </span>
+      </h2>
+      <div id="plateContainer" class="plate-wrap"></div>
+      <div class="legend">
+        <span style="color:#0ea5e9">浓度点（按级别配色）</span>
+        <span style="color:#7c3aed">紫色边框 = 已锁定</span>
+        <span style="color:#b45309">黄框 = 警告</span>
+        <span style="color:#b91c1c">红框 = 错误</span>
+        <span>角标数字 = 首个执行步骤</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>物料汇总</h2>
+      <div class="summary-grid">
+        <div class="stat"><div class="v" id="stWells">–</div><div class="k">总孔数（样/空）</div></div>
+        <div class="stat"><div class="v" id="stStock">–</div><div class="k">母液消耗 µL</div></div>
+        <div class="stat"><div class="v" id="stDiluent">–</div><div class="k">稀释液消耗 µL</div></div>
+        <div class="stat"><div class="v" id="stSteps">–</div><div class="k">台面步骤</div></div>
+        <div class="stat"><div class="v" id="stErr">–</div><div class="k">错误</div></div>
+        <div class="stat"><div class="v" id="stWarn">–</div><div class="k">警告</div></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>可行性检查与偏差</h2>
+      <div id="issueList"></div>
+    </div>
+  </div>
+
+  <!-- ============ 右：孔详情 + 步骤 + 日志 ============ -->
+  <div class="steps-col">
+    <div class="panel">
+      <h2>孔详情</h2>
+      <div id="wellDetail" class="well-detail">
+        <span style="color:var(--muted)">单击板图中的孔查看来源、加入量、终浓度与偏差。</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>台面步骤（按操作顺序）</h2>
+      <div class="progress-bar"><div id="progressFill" style="width:0%"></div></div>
+      <div id="progressText" style="font-size:11.5px;color:var(--muted);margin-bottom:8px">尚未保存实验，保存后可逐步勾选并记录</div>
+      <div class="row-actions" style="margin-top:0">
+        <button type="button" onclick="resetSteps()">↺ 重置勾选</button>
+      </div>
+      <div id="stepList"></div>
+    </div>
+
+    <div class="panel">
+      <h2>执行记录</h2>
+      <div id="logList" class="log-list">
+        <span style="color:var(--muted)">保存实验后，勾选/取消与重算都会留痕。</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
